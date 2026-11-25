@@ -68,7 +68,11 @@ describe("a pair quota's last place", () => {
         "SELECT message_id FROM bot_requests WHERE from_bot_id = 'ranger' AND to_bot_id = 'docs' AND message_id NOT LIKE 'msg_earlier_%'"
       )
       .all()
-      .map((row) => (row as { message_id: string }).message_id)
+      .flatMap((row) =>
+        typeof row === 'object' && row !== null && 'message_id' in row
+          ? [String(row.message_id)]
+          : []
+      )
   const mailWithId = (id: string) => db.getMessageById(id) !== undefined
 
   it('gives it back when its new chat fails to start, and the same send then takes it', async () => {

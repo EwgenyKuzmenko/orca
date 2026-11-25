@@ -28,6 +28,7 @@ const CHAT: LinkableChat = {
 const AFTER_EVERY_SEND = 4_102_444_800_000
 let rig: QueuedMessageTestRig | undefined
 afterEach(async () => {
+  vi.useRealTimers()
   await rig?.dispose()
   rig = undefined
 })
@@ -265,15 +266,24 @@ async function carriedIn(
   return { card, lead }
 }
 
-/** After the failed message, as after a restart: the sibling's 12 wakes since stop it, then a beat. */
+// The clock these deliveries run on, moving on as real time does: Neil's message just after AT, the
+// sibling's wakes a minute later, Docs' post a minute after that.
+const AT = Date.parse('2026-11-25T12:00:00.000Z')
+
+/** After the failed message, as after a restart: the sibling's 12 wakes since stop it, and Docs'
+ *  post comes later. */
 async function siblingStoppedSince(thread: string) {
-  const sibling = stoppedSibling(thread, Date.now())
+  vi.setSystemTime(AT + 60_000)
+  const sibling = stoppedSibling(thread, AT + 60_000)
   expect(await sibling.post()).toMatchObject({ reason: 'bot_chain_limit' })
-  await new Promise((beat) => setTimeout(beat, 20))
+  vi.setSystemTime(AT + 120_000)
   return sibling
 }
 
+// Two real-journal deliveries and a failed start: slow on a loaded runner.
 it("lets a stopped sibling go on once Docs' post carries Neil's failed message in", async () => {
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true })
+  vi.setSystemTime(AT)
   const thread = 'T1:C1:31.1'
   let sibling: Awaited<ReturnType<typeof siblingStoppedSince>> | undefined
   const { card, lead } = await carriedIn(thread, NEIL, async () => {
@@ -291,7 +301,10 @@ it("lets a stopped sibling go on once Docs' post carries Neil's failed message i
   expect(await sibling!.post()).toEqual({ outcome: 'accepted' })
 }, 30_000)
 
+// Two real-journal deliveries and a failed start: slow on a loaded runner.
 it("keeps a sibling stopped when the carried message was another bot's post", async () => {
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true })
+  vi.setSystemTime(AT)
   const thread = 'T1:C1:32.1'
   let sibling: Awaited<ReturnType<typeof siblingStoppedSince>> | undefined
   const { card, lead } = await carriedIn(thread, FROM_DOCS, async () => {

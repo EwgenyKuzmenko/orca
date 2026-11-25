@@ -144,13 +144,12 @@ describe("an item's files sent to another bot", () => {
     }
   }
   const toDocs = () => db.botRequestsSentWithin({ fromBotId: 'ranger', toBotId: 'docs' }, 10).count
-  const mailToDocs = () =>
-    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: COUNT over the messages table.
-    (
-      db.db
-        .prepare('SELECT COUNT(*) AS n FROM messages WHERE to_handle = ?')
-        .get(`orca_session_id:${DOCS_CHAT}`) as { n: number }
-    ).n
+  const mailToDocs = () => {
+    const row = db.db
+      .prepare('SELECT COUNT(*) AS n FROM messages WHERE to_handle = ?')
+      .get(`orca_session_id:${DOCS_CHAT}`)
+    return typeof row === 'object' && row !== null && 'n' in row ? Number(row.n) : 0
+  }
   const uploadFolders = () =>
     readdirSync(uploads, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
@@ -221,7 +220,8 @@ describe("an item's files sent to another bot", () => {
     await expect(send(RANGER_THREAD, question('shared', [shared]))).rejects.toMatchObject({
       code: 'bot_paused'
     })
-    await new Promise((settled) => setTimeout(settled, 50))
+    // The send has settled; a give-back with nothing it copied has nothing to wait on.
+    await new Promise((settled) => setTimeout(settled, 0))
     expect(uploadFolders()).toEqual([sharedUpload])
     expect(claims.has(`${sharedUpload}:other-chat`)).toBe(true)
   })
