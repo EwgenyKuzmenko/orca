@@ -67,7 +67,7 @@ function botPairLimitStop(
 ): BotRequestLimitStop {
   return {
     refusal: botPairLimitRefusal(target, minutesLeft),
-    chatLine: `${sender} didn't send this to ${target}: it has sent ${target} ${BOT_PAIR_LIMIT.requests} requests in a row, so Orca paused it. ${sender} can ask ${target} again in about ${minutesLeft} min.`
+    chatLine: `${sender} didn't send this to ${target}: it has sent ${target} ${BOT_PAIR_LIMIT.requests} requests in the last ${BOT_PAIR_LIMIT.minutes} minutes, so Orca paused it. ${sender} can ask ${target} again in about ${minutesLeft} min.`
   }
 }
 
