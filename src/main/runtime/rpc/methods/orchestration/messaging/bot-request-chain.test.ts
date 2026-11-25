@@ -124,6 +124,8 @@ describe("a bot request chain's limits", () => {
       code: 'bot_request_rate_limit'
     })
     expect(noteChats.at(-1)).toBe(RANGER_THREAD)
+    // The owner reads it as a rate, not a count.
+    expect(notes.at(-1)).toContain('30 requests in the last 10 minutes')
     // Another pair is its own.
     expect((await sent(RANGER_THREAD, { to: 'bot:Three', type: 'question' })).message).toBeDefined()
   })
@@ -202,6 +204,77 @@ describe("a bot request chain's limits", () => {
       })
     }
     expect(notes).toHaveLength(1)
+  })
+
+  /** Ranger's turn woken by the chain's 12th hand-off, with `joined` steered into it. */
+  const twelfthWithJoined = (joined: Record<string, unknown>) => {
+    db.reserveBotRequest({
+      messageId: 'msg_twelfth',
+      rootKey: 'root',
+      fromBotId: 'docs',
+      toBotId: 'ranger',
+      purpose: 'question',
+      depth: 12,
+      record: JSON.stringify({ askers: [{ kind: 'owner' }] })
+    })
+    wake(RANGER_THREAD, 'msg_twelfth')
+    const woken = journals[RANGER_THREAD]![0]!
+    journals[RANGER_THREAD]!.push(
+      {
+        ...message('turn'),
+        body: { kind: 'turn', turnId: 'turn_1', state: 'running', userItemId: woken.itemId }
+      },
+      { ...message('joined', joined), turnScope: { kind: 'turn', turnItemId: 'turn' } }
+    )
+  }
+  const slackAsker = (extra: Record<string, unknown>) => ({
+    origin: 'connector',
+    asker: {
+      source: 'slack',
+      userId: 'U_LINT',
+      name: 'Lint',
+      role: 'member',
+      place: { kind: 'public_channel', id: 'C1' },
+      ...extra
+    }
+  })
+
+  it("never starts a chain over for another Slack app's post that joins its 12th hand-off", async () => {
+    twelfthWithJoined(slackAsker({ app: true }))
+    withChat.mockClear()
+    await expect(send(RANGER_THREAD, { to: 'bot:Docs', type: 'question' })).rejects.toMatchObject({
+      code: 'bot_request_chain_limit'
+    })
+    expect(withChat).not.toHaveBeenCalled()
+  })
+
+  it("starts a chain over for a person's own words joined to it, never another Orca bot's", async () => {
+    twelfthWithJoined(slackAsker({ via: { userId: 'U_DOCS', name: 'Docs' } }))
+    await expect(send(RANGER_THREAD, { to: 'bot:Docs', type: 'question' })).rejects.toMatchObject({
+      code: 'bot_request_chain_limit'
+    })
+    journals[RANGER_THREAD]![2] = {
+      ...message('person', slackAsker({})),
+      turnScope: { kind: 'turn', turnItemId: 'turn' }
+    }
+    const fresh = await sent(RANGER_THREAD, { to: 'bot:Docs', type: 'question' })
+    expect(record(fresh).depth).toBe(1)
+  })
+
+  it('gives back the last place when its new chat fails to start, so the same send goes on', async () => {
+    journals[RANGER_THREAD] = [message('ask')]
+    alreadySent(29)
+    startBotSession.mockImplementationOnce(() => Promise.reject(new Error('could not start')))
+    const last = { to: 'bot:Docs', type: 'question', subject: 'the 30th', chat: 'new' }
+    await expect(send(RANGER_THREAD, last)).rejects.toThrow('could not start')
+    expect(toDocs()).toBe(29)
+    expect(
+      db.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE type = 'question'").get()
+    ).toEqual({ n: 0 })
+    // Tried again as a new operation, it takes the place it gave back.
+    const again = await sent(RANGER_THREAD, last)
+    expect(again.message).toBeDefined()
+    expect(toDocs()).toBe(30)
   })
 
   /** term_worker, started by Ranger's Slack thread, where Dana asked. */

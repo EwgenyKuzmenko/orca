@@ -88,6 +88,11 @@ describe("a request's turn and its chain", () => {
     expect(wokenTurnWith(botPost).personJoined).toBeUndefined()
   })
 
+  it("never starts a new chain for another Slack app's post that joins a request's turn", () => {
+    const appPost = { origin: 'connector' as const, asker: { ...nora, app: true as const } }
+    expect(wokenTurnWith(appPost).personJoined).toBeUndefined()
+  })
+
   it('never starts a new chain for an agent typing through the orca CLI', () => {
     expect(wokenTurnWith({ typedBy: { by: 'agent' } }).personJoined).toBeUndefined()
   })
@@ -107,6 +112,14 @@ describe('botWakesInARow', () => {
       botPost('b2')
     ]
     expect(botWakesInARow(items, 12)).toEqual({ wakes: 2, decided: true })
+  })
+
+  it("neither resets nor counts on another Slack app's post", () => {
+    const appPost = item('lint', { origin: 'connector', asker: { ...nora, app: true } })
+    expect(botWakesInARow([botPost('b1'), appPost, botPost('b2')], 12)).toEqual({
+      wakes: 2,
+      decided: false
+    })
   })
 
   it("resets on a person's Slack message, and stops counting at the limit", () => {

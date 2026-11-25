@@ -48,6 +48,7 @@ export async function deliverToChat(
     return refused('bot_chain_limit')
   }
   const note = [delivery.note, gate.note].filter(Boolean).join('\n\n') || undefined
+  const sentAt = Date.now()
   let admitted = false
   // What takes back an admission the writer then refused.
   const taken: { back?: (() => void) | void } = {}
@@ -96,7 +97,8 @@ export async function deliverToChat(
       if (dispatched === 'unknown') {
         return { outcome: 'unknown', reason: 'writer_failed' }
       }
-      notePersonWrote(link, delivery.asker)
+      // The cards this admission carried were consumed with it, so a person's among them counts.
+      notePersonWrote(link, { asker: delivery.asker, carriedPerson: carried.person }, sentAt)
       return { outcome: 'accepted' }
     }
   } catch {

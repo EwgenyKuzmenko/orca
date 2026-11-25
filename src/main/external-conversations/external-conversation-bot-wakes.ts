@@ -2,7 +2,7 @@
 // person wrote to any bot of this computer's in that thread, so one reply lets every bot there go on.
 import type { ConnectorAsker } from '../../shared/connector-asker-contract'
 import type { ExternalConversationLink } from '../../shared/connectors/external-conversation-link'
-import { botWakesInARow } from '../bots/bot-chain-messages'
+import { botWakesInARow, isPersonAsker } from '../bots/bot-chain-messages'
 import {
   BOT_CHAIN_LIMIT,
   botWakeChain,
@@ -22,14 +22,17 @@ function threadOf(link: Pick<ExternalConversationLink, 'source' | 'externalId'>)
   return `${link.source}:${id}`
 }
 
-/** A person's own message the chat took starts every bot's count in the thread again; one refused or
- *  never taken starts none. */
+/** A person's own message the chat took, the delivery's own or one it carried in, starts every bot's
+ *  count in the thread again, from `sentAt` on: a bot's post that went in with it still counts. One
+ *  refused or never taken starts none. */
 export function notePersonWrote(
   link: Pick<ExternalConversationLink, 'source' | 'externalId' | 'bot'>,
-  asker: ConnectorAsker | undefined
+  wrote: { asker: ConnectorAsker | undefined; carriedPerson: boolean },
+  sentAt: number
 ): void {
-  if (asker && !asker.via && link.bot) {
-    personWroteAt.set(threadOf(link), Date.now())
+  if (link.bot && (isPersonAsker(wrote.asker) || wrote.carriedPerson)) {
+    const thread = threadOf(link)
+    personWroteAt.set(thread, Math.max(personWroteAt.get(thread) ?? 0, sentAt - 1))
   }
 }
 
