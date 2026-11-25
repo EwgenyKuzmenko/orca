@@ -79,7 +79,18 @@ const written: Record<string, string[]> = {}
  *  after), and each read of the returned cards with the next of `returned` (none after). */
 function chatWith(
   items: AgentJournalRenderItem[],
-  { sends = ['accepts'], returned = [] }: { sends?: Send[]; returned?: unknown[][] } = {}
+  {
+    sends = ['accepts'],
+    returned = [],
+    onRead = () => {},
+    onSend = () => {}
+  }: {
+    sends?: Send[]
+    returned?: unknown[][]
+    /** Runs as each read of the returned cards does, and before each send reaches the writer. */
+    onRead?: (read: number) => void
+    onSend?: (send: number) => void
+  } = {}
 ): ConversationChat {
   let send = 0
   let read = 0
@@ -89,7 +100,14 @@ function chatWith(
       operationWindow: async () => ({ complete: true, snapshot: { items, submissions: [] } })
     }),
     conversation: async () => ({
-      journal: { queuedMessages: { returned: async () => returned[read++] ?? [] } }
+      journal: {
+        queuedMessages: {
+          returned: async () => {
+            onRead(read)
+            return returned[read++] ?? []
+          }
+        }
+      }
     }),
     send: async (
       _caller: unknown,
@@ -99,6 +117,7 @@ function chatWith(
         beforeRun?: () => void
       }
     ) => {
+      onSend(send)
       const answer = sends[Math.min(send++, sends.length - 1)]
       if (answer === 'superseded') {
         return {
@@ -127,6 +146,8 @@ const deliver = (
     to?: string
     sends?: Send[]
     returned?: unknown[][]
+    onRead?: (read: number) => void
+    onSend?: (send: number) => void
     id?: string
     note?: string
   } = {}
@@ -232,5 +253,55 @@ describe("another Orca bot's Slack post", () => {
       since.push(posted(fromDocs, at + later))
     }
     expect(await deliver(since)).toMatchObject({ reason: 'bot_chain_limit' })
+  })
+
+  describe('when the writer takes a carried person message', () => {
+    const at = Date.parse('2026-11-25T12:00:00.000Z')
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(at)
+    })
+    /** Docs' chat: old posts, `between` (a wake Docs took while Ranger's send was on its way),
+     *  then `after` posts from once Ranger's writer took Neil's message on. */
+    const docsJournal = (between: AgentJournalRenderItem, after: number) => [
+      ...posts(12),
+      between,
+      ...Array.from({ length: after }, (_, index) => posted(fromDocs, at + 21 + index))
+    ]
+
+    it('counts a sibling wake from while its cards were read as before the reset', async () => {
+      let between: AgentJournalRenderItem | undefined
+      await deliver(posts(3), {
+        returned: [[returnedCard('ranger', NEIL)]],
+        // Docs takes a wake while Ranger's cards are being read; the writer takes Ranger's later.
+        onRead: () => {
+          vi.setSystemTime(at + 10)
+          between = posted(fromDocs, at + 10)
+        },
+        onSend: () => vi.setSystemTime(at + 20)
+      })
+      // 11 after: this is Docs' 12th since Neil, told to stop, not refused as a 13th.
+      expect(await deliver(docsJournal(between!, 11), { to: 'docs' })).toEqual({
+        outcome: 'accepted'
+      })
+      expect(written['chat-docs']!.at(-1)).toContain(BOT_WAKE_LAST_LINE)
+      expect(await deliver(docsJournal(between!, 12), { to: 'docs' })).toMatchObject({
+        reason: 'bot_chain_limit'
+      })
+    })
+
+    it('counts a sibling wake from between a superseded attempt and the taken one as before', async () => {
+      const between = posted(fromDocs, at + 10)
+      const card = [returnedCard('ranger', NEIL)]
+      await deliver(posts(3), {
+        returned: [card, card],
+        sends: ['superseded', 'accepts'],
+        onSend: (attempt) => vi.setSystemTime(attempt === 0 ? at + 5 : at + 20)
+      })
+      expect(await deliver(docsJournal(between, 11), { to: 'docs' })).toEqual({
+        outcome: 'accepted'
+      })
+      expect(written['chat-docs']!.at(-1)).toContain(BOT_WAKE_LAST_LINE)
+    })
   })
 })

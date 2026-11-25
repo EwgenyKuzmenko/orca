@@ -44,15 +44,17 @@ export function chainOfTurn({
   return { requestIds: turn.requestIds, ...(turn.personJoined ? { personJoined: true } : {}) }
 }
 
-/** One send: from this turn, to this bot, of this kind, with this text. */
+/** One send: from this turn, to this bot, of this kind, with this text and the files it names. */
 export function botRequestSendKey(
   turnKey: string,
   toBotId: string,
   purpose: string,
-  text: { subject: string; body?: string | null }
+  text: { subject: string; body?: string | null; files?: readonly string[] }
 ): string {
+  // A send with no files keys as it always has, so one stored before still finds its duplicate.
+  const named = text.files?.length ? [text.files] : []
   const digest = createHash('sha256')
-    .update(JSON.stringify([text.subject, text.body ?? '']))
+    .update(JSON.stringify([text.subject, text.body ?? '', ...named]))
     .digest('hex')
   return JSON.stringify([turnKey, toBotId, purpose, digest])
 }

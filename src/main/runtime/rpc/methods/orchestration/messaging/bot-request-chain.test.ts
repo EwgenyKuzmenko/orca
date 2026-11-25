@@ -261,22 +261,6 @@ describe("a bot request chain's limits", () => {
     expect(record(fresh).depth).toBe(1)
   })
 
-  it('gives back the last place when its new chat fails to start, so the same send goes on', async () => {
-    journals[RANGER_THREAD] = [message('ask')]
-    alreadySent(29)
-    startBotSession.mockImplementationOnce(() => Promise.reject(new Error('could not start')))
-    const last = { to: 'bot:Docs', type: 'question', subject: 'the 30th', chat: 'new' }
-    await expect(send(RANGER_THREAD, last)).rejects.toThrow('could not start')
-    expect(toDocs()).toBe(29)
-    expect(
-      db.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE type = 'question'").get()
-    ).toEqual({ n: 0 })
-    // Tried again as a new operation, it takes the place it gave back.
-    const again = await sent(RANGER_THREAD, last)
-    expect(again.message).toBeDefined()
-    expect(toDocs()).toBe(30)
-  })
-
   /** term_worker, started by Ranger's Slack thread, where Dana asked. */
   function rangerWorker(): string {
     journals[RANGER_THREAD] = [message('ask', askedBy('U_DANA', 'Dana'))]

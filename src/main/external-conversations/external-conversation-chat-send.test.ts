@@ -9,7 +9,12 @@ import {
 import { HOST_TEST_SESSION as SESSION } from '../native-chat/agent-session-wire/host/testing/structured-agent-session-host-test-data.test-fixture'
 import type { StructuredAgentSessionHost } from '../native-chat/agent-session-wire/host/structured-agent-session-host'
 import { ChatDeliveries, type LinkableChat } from './external-conversation-chat-delivery'
-import type { ConversationChat, ConversationChatHost } from './external-conversation-chat'
+import {
+  chatPaneKey,
+  type ConversationChat,
+  type ConversationChatHost
+} from './external-conversation-chat'
+import { deliverToChat } from './external-conversation-chat-send'
 
 // The real chat host and journal: a connector message whose start failed, then the conversation's next.
 const KEY = { source: 'slack' as const, externalId: 'T1:C1:1.2:UBOT' }
@@ -157,3 +162,141 @@ it('an abort after a refused attempt is refused, never read as sent', async () =
   expect(link).not.toHaveBeenCalled()
   expect(deliveries.waiting(SESSION)).toBe(false)
 })
+
+// Another Orca bot's post that carries a person's failed message in: the operation the writer took,
+// that consumed the card, is the one that lets the thread's other bots go on.
+const NEIL = {
+  source: 'slack',
+  userId: 'U_NEIL',
+  name: 'Neil',
+  role: 'owner',
+  place: { kind: 'public_channel', id: 'C1' }
+} as const
+const FROM_DOCS = { ...NEIL, via: { userId: 'U_DOCS', name: 'Docs' } }
+
+/** A chat of another bot in `thread` whose journal holds 12 of Docs' posts in a row, observed at
+ *  `at`, no person after. */
+function stoppedSibling(thread: string, at: number) {
+  const items = Array.from({ length: 12 }, (_, index) => ({
+    itemId: `p${index}`,
+    revision: 0,
+    sequence: index + 1,
+    observedAt: at,
+    body: {
+      kind: 'message' as const,
+      role: 'user' as const,
+      origin: 'connector' as const,
+      asker: FROM_DOCS,
+      blocks: [{ type: 'text' as const, text: 'over to you' }]
+    }
+  }))
+  const chat = {
+    deps: { store: { getConversation: () => ({ currentFence: 1 }) } },
+    journalReads: async () => ({
+      operationWindow: async () => ({ complete: true, snapshot: { items, submissions: [] } })
+    }),
+    conversation: async () => ({ journal: { queuedMessages: { returned: async () => [] } } }),
+    send: async (_caller: unknown, mutation: { beforeRun?: () => void }) => {
+      mutation.beforeRun?.()
+      return { ok: true, value: { clientMessageId: 'c1', queued: {} } }
+    }
+  }
+  const link = {
+    source: 'slack' as const,
+    externalId: `${thread}:URANGER`,
+    sessionId: 'chat-ranger',
+    agent: 'claude' as const,
+    paneKey: chatPaneKey('chat-ranger'),
+    bot: { kind: 'bot' as const, botId: 'ranger' },
+    createdAt: 1
+  }
+  const post = () =>
+    deliverToChat(
+      // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: delivery reads only these of the chat.
+      chat as unknown as ConversationChat,
+      link,
+      {
+        text: 'over to you',
+        asker: { ...FROM_DOCS, text: 'over to you', context: [] },
+        deliveryId: `sibling-${Math.random()}`,
+        signal: new AbortController().signal
+      }
+    )
+  return { post }
+}
+
+/** Docs' post in `thread` carrying in the conversation's message from `author` that failed to start;
+ *  `meanwhile` runs between that message's failed start and Docs' post. */
+async function carriedIn(
+  thread: string,
+  author: typeof NEIL | typeof FROM_DOCS,
+  meanwhile: () => Promise<void>
+) {
+  rig = await createQueuedMessageTestRig({ starting: true })
+  const key = { source: 'slack' as const, externalId: `${thread}:UBOT` }
+  const deliveries = new ChatDeliveries(vi.fn())
+  expect(
+    await deliveries.deliver(chatHost(rig.host), key, CHAT, {
+      text: 'earlier',
+      asker: { ...author, text: 'earlier', context: [] },
+      deliveryId: 'd-earlier',
+      signal: new AbortController().signal
+    })
+  ).toEqual({ outcome: 'accepted' })
+  const j = await journal()
+  const [{ clientMessageId: card }] = await j.reads.sendFingerprints()
+  await j.settleStartFailure({
+    startKey: card,
+    clientMessageId: card,
+    fence: rig.store.getRecord(SESSION)!.lease.runtimeFence,
+    ...agentSessionFailureWords(agentSessionFailureFact('notSignedIn'), { surface: 'rejection' })
+  })
+  deliveries.origin(SESSION, null)
+  await meanwhile()
+  expect(
+    await deliveries.deliver(chatHost(rig.host), key, CHAT, {
+      text: 'over to you',
+      asker: { ...FROM_DOCS, text: 'over to you', context: [] },
+      deliveryId: 'd-lead',
+      signal: new AbortController().signal
+    })
+  ).toEqual({ outcome: 'accepted' })
+  const lead = await lastSent()
+  return { card, lead }
+}
+
+/** After the failed message, as after a restart: the sibling's 12 wakes since stop it, then a beat. */
+async function siblingStoppedSince(thread: string) {
+  const sibling = stoppedSibling(thread, Date.now())
+  expect(await sibling.post()).toMatchObject({ reason: 'bot_chain_limit' })
+  await new Promise((beat) => setTimeout(beat, 20))
+  return sibling
+}
+
+it("lets a stopped sibling go on once Docs' post carries Neil's failed message in", async () => {
+  const thread = 'T1:C1:31.1'
+  let sibling: Awaited<ReturnType<typeof siblingStoppedSince>> | undefined
+  const { card, lead } = await carriedIn(thread, NEIL, async () => {
+    sibling = await siblingStoppedSince(thread)
+  })
+  // One operation: it consumed Neil's card, carries his stamp and text first, then Docs' post.
+  expect(await (await journal()).queuedMessages.get(card)).toMatchObject({ consumedAs: lead.id })
+  expect(lead.body.carriedAskers).toEqual([expect.objectContaining({ userId: 'U_NEIL' })])
+  expect(lead.body.carriedAskers![0]).not.toHaveProperty('via')
+  expect(lead.body.asker).toMatchObject({ via: { name: 'Docs' } })
+  expect(lead.body.blocks.map((block) => (block.type === 'text' ? block.text : ''))).toEqual([
+    expect.stringContaining('<<<\nearlier\n>>>'),
+    expect.stringContaining('<<<\nover to you')
+  ])
+  expect(await sibling!.post()).toEqual({ outcome: 'accepted' })
+}, 30_000)
+
+it("keeps a sibling stopped when the carried message was another bot's post", async () => {
+  const thread = 'T1:C1:32.1'
+  let sibling: Awaited<ReturnType<typeof siblingStoppedSince>> | undefined
+  const { card, lead } = await carriedIn(thread, FROM_DOCS, async () => {
+    sibling = await siblingStoppedSince(thread)
+  })
+  expect(await (await journal()).queuedMessages.get(card)).toMatchObject({ consumedAs: lead.id })
+  expect(await sibling!.post()).toMatchObject({ reason: 'bot_chain_limit' })
+}, 30_000)

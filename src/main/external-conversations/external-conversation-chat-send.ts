@@ -48,13 +48,16 @@ export async function deliverToChat(
     return refused('bot_chain_limit')
   }
   const note = [delivery.note, gate.note].filter(Boolean).join('\n\n') || undefined
-  const sentAt = Date.now()
   let admitted = false
+  // When the writer took this attempt, its carried cards with it: a person's among them counts from
+  // there, so wakes before it stay before and the post that carried it is the first after.
+  let admittedAt = 0
   // What takes back an admission the writer then refused.
   const taken: { back?: (() => void) | void } = {}
   const admit = () => {
     if (!admitted) {
       admitted = true
+      admittedAt = Date.now()
       taken.back = delivery.admitted?.()
     }
   }
@@ -98,7 +101,11 @@ export async function deliverToChat(
         return { outcome: 'unknown', reason: 'writer_failed' }
       }
       // The cards this admission carried were consumed with it, so a person's among them counts.
-      notePersonWrote(link, { asker: delivery.asker, carriedPerson: carried.person }, sentAt)
+      notePersonWrote(
+        link,
+        { asker: delivery.asker, carriedPerson: carried.person },
+        admittedAt || Date.now()
+      )
       return { outcome: 'accepted' }
     }
   } catch {

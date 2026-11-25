@@ -23,16 +23,17 @@ function threadOf(link: Pick<ExternalConversationLink, 'source' | 'externalId'>)
 }
 
 /** A person's own message the chat took, the delivery's own or one it carried in, starts every bot's
- *  count in the thread again, from `sentAt` on: a bot's post that went in with it still counts. One
- *  refused or never taken starts none. */
+ *  count in the thread again, from `admittedAt` (when the writer took it) on: a bot's post that went
+ *  in with it still counts, and a wake from before stays before. One refused or never taken starts
+ *  none. */
 export function notePersonWrote(
   link: Pick<ExternalConversationLink, 'source' | 'externalId' | 'bot'>,
   wrote: { asker: ConnectorAsker | undefined; carriedPerson: boolean },
-  sentAt: number
+  admittedAt: number
 ): void {
   if (link.bot && (isPersonAsker(wrote.asker) || wrote.carriedPerson)) {
     const thread = threadOf(link)
-    personWroteAt.set(thread, Math.max(personWroteAt.get(thread) ?? 0, sentAt - 1))
+    personWroteAt.set(thread, Math.max(personWroteAt.get(thread) ?? 0, admittedAt - 1))
   }
 }
 

@@ -156,6 +156,19 @@ function holdPairPlace(
   }
 }
 
+/** Gives back what a send made ready (`giveBack`) once it settles, unless the returned `stored` was
+ *  called first: what stops it after that point (a late refusal, a racing duplicate) keeps nothing. */
+export function giveBackUnlessStored(
+  held: (() => void)[],
+  giveBack: (() => Promise<void>) | undefined
+): () => void {
+  let stored = false
+  held.push(() => void (stored || giveBack?.()))
+  return () => {
+    stored = true
+  }
+}
+
 /** Runs a send with what it holds under the limits, each released once the send settles. */
 export async function holdingUntilSettled<T>(
   send: (held: (() => void)[]) => Promise<T>

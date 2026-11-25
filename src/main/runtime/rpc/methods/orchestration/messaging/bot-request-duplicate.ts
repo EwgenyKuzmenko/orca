@@ -2,18 +2,16 @@
 import type { OrchestrationDb } from '../../../../orchestration/db/orchestration-db'
 import { exposeMessage } from './mailbox-message-receipt'
 
-export function botRequestDuplicateReceipt(
-  db: OrchestrationDb,
-  targetName: string,
-  blocked: { messageId: string }
-): { sent: false; receipt: unknown } {
-  const earlier = db.getMessageById(blocked.messageId)
-  return {
-    sent: false,
-    receipt: {
-      ...(earlier ? { message: exposeMessage(earlier) } : {}),
-      duplicate: true,
-      next: `${targetName} already has this request, so no second message was sent.`
+export const botRequestDuplicateReceipt =
+  (db: OrchestrationDb, targetName: string) =>
+  (blocked: { messageId: string }): { sent: false; receipt: unknown } => {
+    const earlier = db.getMessageById(blocked.messageId)
+    return {
+      sent: false,
+      receipt: {
+        ...(earlier ? { message: exposeMessage(earlier) } : {}),
+        duplicate: true,
+        next: `${targetName} already has this request, so no second message was sent.`
+      }
     }
   }
-}
