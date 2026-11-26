@@ -1,4 +1,5 @@
 import type { BotSessionHooks } from '../bots/bot-turn-ended'
+import { forgetWakeDms } from '../bots/bot-wake-reply-place'
 import { UNSET_BOT_SESSION_HOOKS } from '../bots/bot-session-hooks-unset'
 import { sessionRepliesInSlack } from '../external-conversations/external-conversation-links'
 import { join } from 'node:path'
@@ -107,6 +108,7 @@ export abstract class OrcaRuntimeWithBots extends OrcaRuntimeWithLinearCommands 
       this.lookAround.forget(botId)
       void this.botWork.forgetBot(botId)
       this.bots.memory.removed(botId)
+      forgetWakeDms(botId)
       void this.bots.slackIcons.forget(botId).catch(() => undefined)
     }
   })

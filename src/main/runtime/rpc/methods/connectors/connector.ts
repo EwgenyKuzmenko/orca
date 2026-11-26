@@ -7,6 +7,7 @@ import {
 import { botReplyRefusal } from '../../../../external-conversations/external-conversation-bots'
 import {
   ConnectorReply,
+  ConnectorReplySavedDm,
   ConnectorWakeReplyPlace,
   CONNECTOR_REPLY_HTML_PAGE_AS_FILE
 } from '../../../../../shared/rpc-contract/connectors/connector-params'
@@ -30,29 +31,61 @@ import { splitHtmlDocumentFences } from '../../../../../shared/markdown/html-doc
 import type { ConnectorCloudFeature } from '../../../../../shared/connector-cloud-features'
 import { botOfSession } from '../../../../bots/bot-session-tabs'
 
-/** The DM `--to` names: only from the bot's own Home Chat, and only one its worker start saved. */
+/** The DM `--to` names: only from the bot's own Home Chat, only one its worker start saved, and
+ *  never from a turn another conversation's message opened (that person's words stay theirs). */
 function homeChatSavedDm(
-  params: { to?: string } & ({ sessionId: string } | { paneKey: string }),
+  sessionId: string,
+  to: string,
   target: ReplyTarget,
   context: Pick<RpcContext, 'runtime' | 'orchestrationCaller'>
-): ConversationKey {
-  const sessionId = 'sessionId' in params ? params.sessionId : null
-  const bot =
-    sessionId && context.runtime.bots.enabled()
-      ? botOfSession(context.runtime.bots, sessionId)
-      : null
-  const saved =
-    bot &&
-    params.to &&
-    sessionCallerOf(context.orchestrationCaller)?.sessionId === sessionId &&
-    target.bot?.kind === 'bot-chat' &&
-    target.bot.botId === bot.id
-      ? recordedWakeDm(bot.id, params.to)
-      : null
-  if (!saved) {
-    throw new Error('not_a_saved_dm')
+): ConversationKey | null {
+  const bot = context.runtime.bots.enabled() ? botOfSession(context.runtime.bots, sessionId) : null
+  if (
+    !bot ||
+    sessionCallerOf(context.orchestrationCaller)?.sessionId !== sessionId ||
+    target.bot?.kind !== 'bot-chat' ||
+    target.bot.botId !== bot.id
+  ) {
+    return null
   }
-  return saved
+  const saved = recordedWakeDm(bot.id, to)
+  const openedByAnother =
+    target.answerDeliveryId !== undefined && saved?.externalId !== target.key.externalId
+  return saved && !openedByAnother ? saved : null
+}
+
+type CloudReply = Parameters<
+  NonNullable<ReturnType<OrcaRuntimeService['getConnectorCloud']>>['reply']
+>[0]
+
+/** Posts through Orca Cloud; a reply refused outright reached no one, so its attempt isn't counted. */
+async function sendReply(
+  runtime: Pick<OrcaRuntimeService, 'getConnectorCloud'>,
+  paneKey: string,
+  reply: CloudReply
+) {
+  const refused = connectorPostAttempts.attempted(
+    paneKey,
+    reply.replyId,
+    reply.conversation.externalId
+  )
+  const sent = await runtime.getConnectorCloud()?.reply(reply)
+  // Never sent, or refused outright: nothing reached the thread. A lost answer may have posted.
+  if (
+    !sent ||
+    (!sent.ok && sent.status !== null && sent.status < 500 && sent.error !== 'post_uncertain')
+  ) {
+    refused()
+  }
+  if (!sent) {
+    throw new Error('connector_not_connected')
+  }
+  if (!sent.ok) {
+    throw new Error(
+      sent.error === 'not_this_hosts_thread' ? 'not_this_hosts_thread' : 'connector_unavailable'
+    )
+  }
+  return sent.value
 }
 
 export function requireSeam(
@@ -78,15 +111,15 @@ export const CONNECTOR_METHODS = [
       if (!target) {
         throw new Error('not_a_cloud_conversation')
       }
-      const savedDm = params.to ? homeChatSavedDm(params, target, context) : null
       // A bot posts only into the conversation its chat is bound to, as that bot.
-      const botRefusal = savedDm
-        ? null
-        : botReplyRefusal(target, context.runtime.bots.enabled() ? context.runtime.bots.list() : [])
+      const botRefusal = botReplyRefusal(
+        target,
+        context.runtime.bots.enabled() ? context.runtime.bots.list() : []
+      )
       if (botRefusal) {
         throw new Error(botRefusal)
       }
-      const conversation = cloudConversation(savedDm ?? target.key)
+      const conversation = cloudConversation(target.key)
       if (!conversation) {
         throw new Error('not_a_cloud_conversation')
       }
@@ -103,9 +136,7 @@ export const CONNECTOR_METHODS = [
       const cloud = context.runtime.getConnectorCloud()
       // Slack shows a whole page as an .html file; a caller that asked resends it with the page attached.
       const features = cloud?.cloudFeatures()
-      // A saved DM takes its words inline: files would stage in the chat's current conversation.
       if (
-        !savedDm &&
         params.pagesAsFiles &&
         conversation.source === 'slack' &&
         'sessionId' in params &&
@@ -120,13 +151,11 @@ export const CONNECTOR_METHODS = [
       }
       // Under replies.outbox a reply naming its turn's request takes that request's answer key.
       const keyed =
-        !savedDm &&
         target.answerDeliveryId &&
         cloud?.cloudFeatures()?.has(CONNECTOR_REPLIES_OUTBOX_FEATURE) === true
           ? { answerDeliveryId: target.answerDeliveryId }
           : {}
-      const refused = connectorPostAttempts.attempted(paneKey, replyId, conversation.externalId)
-      const sent = await cloud?.reply({
+      const sent = await sendReply(context.runtime, paneKey, {
         replyId,
         conversation,
         turnId: target.turnId,
@@ -135,22 +164,37 @@ export const CONNECTOR_METHODS = [
         ...(review ? { review } : {}),
         ...keyed
       })
-      // Never sent, or refused outright: nothing reached the thread. A lost answer may have posted.
-      if (
-        !sent ||
-        (!sent.ok && sent.status !== null && sent.status < 500 && sent.error !== 'post_uncertain')
-      ) {
-        refused()
+      return { ...sent, place: target.place }
+    }
+  }),
+  // `orca bot reply --to`: a bot's Home Chat answers the DM its worker start saved, from a later
+  // turn, whichever DM wrote last.
+  defineMethod({
+    name: 'connector.replySavedDm',
+    permission: 'workspace',
+    params: ConnectorReplySavedDm,
+    handler: async ({ sessionId, replyId, text, to }, context) => {
+      const paneKey = chatPaneKey(sessionId)
+      const target = requireSeam(context.runtime).replyTarget(paneKey)
+      const saved = target ? homeChatSavedDm(sessionId, to, target, context) : null
+      const conversation = saved && cloudConversation(saved)
+      if (!target || !conversation) {
+        throw new Error('not_a_saved_dm')
       }
-      if (!sent) {
-        throw new Error('connector_not_connected')
+      if (target.turnId === null) {
+        throw new Error('no_current_turn')
       }
-      if (!sent.ok) {
-        throw new Error(
-          sent.error === 'not_this_hosts_thread' ? 'not_this_hosts_thread' : 'connector_unavailable'
-        )
-      }
-      return { ...sent.value, place: savedDm ? params.to : target.place }
+      const turnFor = await botTurnFor(context.runtime, sessionId, {
+        verifiedSessionId: sessionCallerOf(context.orchestrationCaller)?.sessionId
+      })
+      const sent = await sendReply(context.runtime, paneKey, {
+        replyId,
+        conversation,
+        turnId: target.turnId,
+        text,
+        turnFor
+      })
+      return { ...sent, place: to }
     }
   }),
   // `orca orchestration worker-start`: where its result should be told, if a later turn wants to.

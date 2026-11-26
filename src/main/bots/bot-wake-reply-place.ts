@@ -61,3 +61,8 @@ export async function wakeReplyPlace(
 export function recordedWakeDm(botId: string, to: string): ConversationKey | null {
   return recordedDms.get(botId)?.get(to) ?? null
 }
+
+/** A deleted bot's saved DMs go with it. */
+export function forgetWakeDms(botId: string): void {
+  recordedDms.delete(botId)
+}

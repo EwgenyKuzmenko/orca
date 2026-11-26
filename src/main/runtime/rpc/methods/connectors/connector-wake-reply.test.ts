@@ -11,6 +11,7 @@ vi.mock('../../../../bots/bot-session-tabs', () => ({
 }))
 
 import { CONNECTOR_METHODS } from './connector'
+import { forgetWakeDms } from '../../../../bots/bot-wake-reply-place'
 
 const CHAT = '55555555-5555-4555-8555-555555555555'
 const OTHER_BOT_CHAT = '66666666-6666-4666-8666-666666666666'
@@ -56,7 +57,7 @@ const placeFor = (sessionId: string, caller = sessionId) =>
   handler('connector.wakeReplyPlace')({ sessionId }, context(caller))
 const replyTo = async (to: string, sessionId = CHAT) => {
   reply.mockClear()
-  await handler('connector.reply')(
+  await handler('connector.replySavedDm')(
     { sessionId, replyId: 'r1', text: 'The worker failed to start.', to },
     context(sessionId)
   )
@@ -93,6 +94,15 @@ describe('a turn that started on its own answers where its worker start came fro
     await expect(replyTo('https://app.slack.com/client/T1/D0Y')).rejects.toThrow('not_a_saved_dm')
     target = homeChat(DM_Y, false, 'bot-b')
     await expect(replyTo(X_LINK, OTHER_BOT_CHAT)).rejects.toThrow('not_a_saved_dm')
+    // A turn Y's own message opened never speaks in X.
+    target = homeChat(DM_Y, true)
+    await expect(replyTo(X_LINK)).rejects.toThrow('not_a_saved_dm')
+    target = homeChat(DM_X, true)
+    expect(await replyTo(X_LINK)).toEqual({ source: 'slack', externalId: DM_X })
+    // A deleted bot's saved DMs go with it.
+    forgetWakeDms('bot-a')
+    target = homeChat(DM_Y, false)
+    await expect(replyTo(X_LINK)).rejects.toThrow('not_a_saved_dm')
     // Without --to the Home Chat still has no one conversation to post into.
     target = homeChat(DM_Y, false)
     await expect(

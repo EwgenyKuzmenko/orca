@@ -104,6 +104,7 @@ export const ORCHESTRATION_WORKER_LAUNCH_HANDLER: Record<string, CommandHandler>
       tellWake()
       throw await explainOlderRuntimeRunRequired(client, error)
     })
+    tellWake()
     if (result.result.state !== 'ready') {
       process.exitCode = 1
     }
@@ -130,7 +131,6 @@ export const ORCHESTRATION_WORKER_LAUNCH_HANDLER: Record<string, CommandHandler>
     } else {
       printOrchestrationResult(renderedResult, json, WORKER_START_VIEW)
     }
-    tellWake()
     // Only an explicit --keep-open fails the start; a new workspace's default is best effort.
     if (flags.has('keep-open') && keepOpenState && keepOpenState !== 'retained') {
       const dispatchId = result.result.dispatchId
