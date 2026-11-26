@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CONNECTOR_REPLY_MAX_FILES } from '../../shared/connector-action-contract'
+import { redactLocalPaths } from '../../shared/connectors/slack-local-paths'
 import { splitHtmlDocumentFences } from '../../shared/markdown/html-document-fences'
 import type { LocalFile } from '../slack/slack-action-files'
 
@@ -52,10 +53,11 @@ async function stagePages(
     const files: LocalFile[] = []
     const taken = new Set<string>()
     for (const document of documents) {
-      const name = htmlFileName(document, taken)
+      const page = redactLocalPaths(document)
+      const name = htmlFileName(page, taken)
       const path = join(dir, name)
-      await writeFile(path, document)
-      files.push({ path, name, size: Buffer.byteLength(document) })
+      await writeFile(path, page)
+      files.push({ path, name, size: Buffer.byteLength(page) })
     }
     return await stage(files)
   } finally {
