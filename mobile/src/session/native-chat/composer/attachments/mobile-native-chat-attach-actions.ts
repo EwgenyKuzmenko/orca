@@ -21,7 +21,6 @@ export function mobileNativeChatAttachActions(args: {
     actions.push({
       id: 'files',
       label: translate('session.nativeChatAttachActions.files', 'Files'),
-      hint: translate('session.nativeChatAttachActions.fileTypes', 'PDF, text, code…'),
       icon: Paperclip,
       closeBeforePress: true,
       onPress: args.onFiles
