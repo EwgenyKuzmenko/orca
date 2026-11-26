@@ -36,6 +36,7 @@ import { NativeChatMessageTimestamp } from '../../native-chat/messages/rows/Nati
 import { BotItemStatusIcon } from './BotItemStatusIcon'
 import { BotItemLinkedRefs } from './BotItemLinkedRefs'
 import { formatBotItemSnoozeTime } from './bot-item-snooze-time'
+import { botItemWithdrawnNote } from './bot-item-withdrawn-note'
 import type { BotItemPendingComments } from '../../../../../shared/bots/bot-item-pending-comments'
 import { botItemPendingAnswersOnly } from '../../../../../shared/bots/bot-item-sent-answers'
 import { NATIVE_CHAT_QUOTE_SOURCE_PROPS } from '../../../../../shared/native-chat/input/quotes/native-chat-quote-selection'
@@ -119,7 +120,7 @@ function EventBody({ event, item }: { event: BotItemEvent; item: BotItem }): Rea
       )
     }
     case 'status': {
-      const note = str(data.note)
+      const note = botItemWithdrawnNote(data, t) ?? str(data.note)
       const closed = (value: unknown) => value === 'done' || value === 'canceled'
       const reopened = closed(data.from) && !closed(data.to)
       return (
