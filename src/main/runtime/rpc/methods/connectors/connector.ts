@@ -32,7 +32,7 @@ import type { ConnectorCloudFeature } from '../../../../../shared/connector-clou
 import { botOfSession } from '../../../../bots/bot-session-tabs'
 
 /** The DM `--to` names: only from the bot's own Home Chat, only one its worker start saved, and
- *  never from a turn another conversation's message opened (that person's words stay theirs). */
+ *  only in a turn no person's message opened or joined (their words stay theirs). */
 function homeChatSavedDm(
   sessionId: string,
   to: string,
@@ -48,10 +48,13 @@ function homeChatSavedDm(
   ) {
     return null
   }
-  const saved = recordedWakeDm(bot.id, to)
-  const openedByAnother =
-    target.answerDeliveryId !== undefined && saved?.externalId !== target.key.externalId
-  return saved && !openedByAnother ? saved : null
+  // Any person's message that opened or joined the running turn, whichever DM the chat is linked to
+  // by now. Kept in memory like the saved DMs, so a restart loses both together. (The journal's turn
+  // opener can't tell: a turn that started on its own reads as the last message's.)
+  if (requireSeam(context.runtime).deliveredTurn(sessionId)) {
+    return null
+  }
+  return recordedWakeDm(bot.id, to)
 }
 
 type CloudReply = Parameters<
@@ -209,8 +212,10 @@ export const CONNECTOR_METHODS = [
       if (!bot || sessionCallerOf(context.orchestrationCaller)?.sessionId !== sessionId) {
         return { place: null }
       }
-      const target = runtime.getExternalConversationSeam()?.replyTarget(chatPaneKey(sessionId))
-      const placed = await wakeReplyPlace(bot.id, target ?? null, () =>
+      const seam = runtime.getExternalConversationSeam()
+      const target = seam?.replyTarget(chatPaneKey(sessionId))
+      const delivered = seam?.deliveredTurn(sessionId) ?? false
+      const placed = await wakeReplyPlace(bot.id, target ?? null, delivered, () =>
         readBotTurnOrigin(runtime, runtime.getOrchestrationDb(), sessionId).catch(() => null)
       )
       return placed ?? { place: null }

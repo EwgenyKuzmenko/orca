@@ -21,10 +21,15 @@ const X_LINK = 'https://app.slack.com/client/T1/D0X'
 const THREAD = 'T1:C1:1712.000100:UBOT'
 
 let target: Record<string, unknown> | null = null
+// A person's message opened or joined the running turn, as the host's delivery mark records it.
+let heard = false
 const runtime = {
   getOrchestrationDb: () => ({}),
   bots: { enabled: () => true, list: () => [] },
-  getExternalConversationSeam: () => ({ replyTarget: () => target }),
+  getExternalConversationSeam: () => ({
+    replyTarget: () => target,
+    deliveredTurn: () => heard
+  }),
   getConnectorCloud: () => ({ cloudFeatures: () => new Set<string>(), reply })
 }
 const context = (sessionId: string) => ({
@@ -53,8 +58,15 @@ const handler = (name: string) =>
     params: unknown,
     context: unknown
   ) => Promise<unknown>
-const placeFor = (sessionId: string, caller = sessionId) =>
-  handler('connector.wakeReplyPlace')({ sessionId }, context(caller))
+// A worker start runs in the turn a message opened: the host's delivery mark is set.
+const placeFor = async (sessionId: string, caller = sessionId, delivered = true) => {
+  heard = delivered
+  try {
+    return await handler('connector.wakeReplyPlace')({ sessionId }, context(caller))
+  } finally {
+    heard = false
+  }
+}
 const replyTo = async (to: string, sessionId = CHAT) => {
   reply.mockClear()
   await handler('connector.replySavedDm')(
@@ -74,6 +86,8 @@ describe('a turn that started on its own answers where its worker start came fro
     target = { ...homeChat(THREAD, true), bot: { kind: 'bot', botId: 'bot-a' } }
     origin.mockResolvedValue({ source: 'slack', placeId: 'C1' })
     expect(await placeFor(CHAT)).toEqual({ place: `the DM ${THREAD}` })
+    // A turn that started on its own reads its opener as the last message's; no mark, no place.
+    expect(await placeFor(CHAT, CHAT, false)).toEqual({ place: null })
     // A turn Orca began, a thread elsewhere in the origin record, or another chat asking: nothing.
     target = { ...homeChat(THREAD, false), bot: { kind: 'bot', botId: 'bot-a' } }
     expect(await placeFor(CHAT)).toEqual({ place: null })
@@ -94,11 +108,12 @@ describe('a turn that started on its own answers where its worker start came fro
     await expect(replyTo('https://app.slack.com/client/T1/D0Y')).rejects.toThrow('not_a_saved_dm')
     target = homeChat(DM_Y, false, 'bot-b')
     await expect(replyTo(X_LINK, OTHER_BOT_CHAT)).rejects.toThrow('not_a_saved_dm')
-    // A turn Y's own message opened never speaks in X.
-    target = homeChat(DM_Y, true)
+    // A turn a person's message opened or joined never speaks in X, even once the chat's link moved
+    // on to a DM that wrote mid-turn (no stamp then matches the link).
+    heard = true
+    target = homeChat(DM_Y, false)
     await expect(replyTo(X_LINK)).rejects.toThrow('not_a_saved_dm')
-    target = homeChat(DM_X, true)
-    expect(await replyTo(X_LINK)).toEqual({ source: 'slack', externalId: DM_X })
+    heard = false
     // A deleted bot's saved DMs go with it.
     forgetWakeDms('bot-a')
     target = homeChat(DM_Y, false)

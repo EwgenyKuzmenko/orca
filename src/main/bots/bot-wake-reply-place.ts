@@ -25,9 +25,17 @@ const recordedDms = new Map<string, Map<string, ConversationKey>>()
 export async function wakeReplyPlace(
   botId: string,
   target: ReplyTarget | null,
+  // The host's mark that a connector message opened or joined the running turn: the journal's opener
+  // alone can't say, as a turn that started on its own reads as the last message's.
+  delivered: boolean,
   readOrigin: () => Promise<BotWakingPlace | null>
 ): Promise<WakeReplyPlace | null> {
-  if (!target?.answerDeliveryId || target.bot?.botId !== botId || target.key.source !== 'slack') {
+  if (
+    !delivered ||
+    !target?.answerDeliveryId ||
+    target.bot?.botId !== botId ||
+    target.key.source !== 'slack'
+  ) {
     return null
   }
   const slack = slackPlaceOf(target.key.externalId)
