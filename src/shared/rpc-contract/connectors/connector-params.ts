@@ -13,6 +13,8 @@ export const CONNECTOR_REPLY_ERROR_CODES = [
   'bot_chat_reply',
   // The chat's conversation names a bot that is gone, off, or lives in another home.
   'not_this_bots_conversation',
+  // --to names no DM this bot's own worker start saved, or was given outside its Home Chat.
+  'not_a_saved_dm',
   // Asked with pagesAsFiles: the text holds a whole HTML page, which Slack gets as an .html file.
   'html_document_as_file'
 ] as const
@@ -30,7 +32,9 @@ const ReplyText = {
   // Inline notes on the pull request the conversation is on; elsewhere they follow the text.
   review: ConnectorReview.optional(),
   // The caller can send a whole HTML page as a file; only then may Slack text holding one be refused.
-  pagesAsFiles: z.literal(true).optional()
+  pagesAsFiles: z.literal(true).optional(),
+  // A bot's Home Chat: the DM its worker start saved (connector.wakeReplyPlace's `to`).
+  to: z.string().min(1).max(2048).optional()
 }
 
 /** An agent's reply to its conversation's thread, from the pane or native chat it runs in; one replyId posts at most once. */
@@ -48,6 +52,11 @@ export const ConnectorAct = z.object({
 })
 
 /** `orca bot reply --react`: an emoji on the message that woke the calling bot's run. */
+/** Where the calling bot chat's running turn started, for a worker start to name. */
+export const ConnectorWakeReplyPlace = z.object({
+  sessionId: z.string().min(1, 'Missing session id')
+})
+
 export const ConnectorReact = z.object({
   sessionId: z.string().min(1, 'Missing session id'),
   emoji: z.string().min(1).max(100)

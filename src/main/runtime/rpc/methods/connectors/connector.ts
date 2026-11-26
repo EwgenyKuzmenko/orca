@@ -7,12 +7,19 @@ import {
 import { botReplyRefusal } from '../../../../external-conversations/external-conversation-bots'
 import {
   ConnectorReply,
+  ConnectorWakeReplyPlace,
   CONNECTOR_REPLY_HTML_PAGE_AS_FILE
 } from '../../../../../shared/rpc-contract/connectors/connector-params'
 import type { ExternalConversationSeam } from '../../../../external-conversations/external-conversation-seam'
 import { chatPaneKey } from '../../../../external-conversations/external-conversation-chat'
 import type { OrcaRuntimeService } from '../../../orca-runtime'
-import { defineMethod } from '../../core'
+import { defineMethod, type RpcContext } from '../../core'
+import { readBotTurnOrigin } from '../orchestration/messaging/bot-turn-origin'
+import { recordedWakeDm, wakeReplyPlace } from '../../../../bots/bot-wake-reply-place'
+import type {
+  ConversationKey,
+  ReplyTarget
+} from '../../../../external-conversations/external-conversation-types'
 import { botTurnFor } from '../../../../bots/bot-turn-for'
 import { sessionCallerOf } from '../../../orchestration/addressing/orchestration-caller-identity'
 import { CONNECTOR_ACT_METHOD } from '../connector-act'
@@ -22,6 +29,31 @@ import { CONNECTOR_LEAVE_THREAD_METHOD } from '../connector-leave-thread'
 import { splitHtmlDocumentFences } from '../../../../../shared/markdown/html-document-fences'
 import type { ConnectorCloudFeature } from '../../../../../shared/connector-cloud-features'
 import { botOfSession } from '../../../../bots/bot-session-tabs'
+
+/** The DM `--to` names: only from the bot's own Home Chat, and only one its worker start saved. */
+function homeChatSavedDm(
+  params: { to?: string } & ({ sessionId: string } | { paneKey: string }),
+  target: ReplyTarget,
+  context: Pick<RpcContext, 'runtime' | 'orchestrationCaller'>
+): ConversationKey {
+  const sessionId = 'sessionId' in params ? params.sessionId : null
+  const bot =
+    sessionId && context.runtime.bots.enabled()
+      ? botOfSession(context.runtime.bots, sessionId)
+      : null
+  const saved =
+    bot &&
+    params.to &&
+    sessionCallerOf(context.orchestrationCaller)?.sessionId === sessionId &&
+    target.bot?.kind === 'bot-chat' &&
+    target.bot.botId === bot.id
+      ? recordedWakeDm(bot.id, params.to)
+      : null
+  if (!saved) {
+    throw new Error('not_a_saved_dm')
+  }
+  return saved
+}
 
 export function requireSeam(
   runtime: Pick<OrcaRuntimeService, 'getExternalConversationSeam'>
@@ -46,15 +78,15 @@ export const CONNECTOR_METHODS = [
       if (!target) {
         throw new Error('not_a_cloud_conversation')
       }
+      const savedDm = params.to ? homeChatSavedDm(params, target, context) : null
       // A bot posts only into the conversation its chat is bound to, as that bot.
-      const botRefusal = botReplyRefusal(
-        target,
-        context.runtime.bots.enabled() ? context.runtime.bots.list() : []
-      )
+      const botRefusal = savedDm
+        ? null
+        : botReplyRefusal(target, context.runtime.bots.enabled() ? context.runtime.bots.list() : [])
       if (botRefusal) {
         throw new Error(botRefusal)
       }
-      const conversation = cloudConversation(target.key)
+      const conversation = cloudConversation(savedDm ?? target.key)
       if (!conversation) {
         throw new Error('not_a_cloud_conversation')
       }
@@ -71,7 +103,9 @@ export const CONNECTOR_METHODS = [
       const cloud = context.runtime.getConnectorCloud()
       // Slack shows a whole page as an .html file; a caller that asked resends it with the page attached.
       const features = cloud?.cloudFeatures()
+      // A saved DM takes its words inline: files would stage in the chat's current conversation.
       if (
+        !savedDm &&
         params.pagesAsFiles &&
         conversation.source === 'slack' &&
         'sessionId' in params &&
@@ -86,11 +120,12 @@ export const CONNECTOR_METHODS = [
       }
       // Under replies.outbox a reply naming its turn's request takes that request's answer key.
       const keyed =
+        !savedDm &&
         target.answerDeliveryId &&
         cloud?.cloudFeatures()?.has(CONNECTOR_REPLIES_OUTBOX_FEATURE) === true
           ? { answerDeliveryId: target.answerDeliveryId }
           : {}
-      const refused = connectorPostAttempts.attempted(paneKey, replyId, target.key.externalId)
+      const refused = connectorPostAttempts.attempted(paneKey, replyId, conversation.externalId)
       const sent = await cloud?.reply({
         replyId,
         conversation,
@@ -115,7 +150,26 @@ export const CONNECTOR_METHODS = [
           sent.error === 'not_this_hosts_thread' ? 'not_this_hosts_thread' : 'connector_unavailable'
         )
       }
-      return { ...sent.value, place: target.place }
+      return { ...sent.value, place: savedDm ? params.to : target.place }
+    }
+  }),
+  // `orca orchestration worker-start`: where its result should be told, if a later turn wants to.
+  defineMethod({
+    name: 'connector.wakeReplyPlace',
+    permission: 'workspace',
+    params: ConnectorWakeReplyPlace,
+    handler: async ({ sessionId }, context) => {
+      const { runtime } = context
+      const bot = runtime.bots.enabled() ? botOfSession(runtime.bots, sessionId) : null
+      // Only the chat itself: what this saves lets that chat post.
+      if (!bot || sessionCallerOf(context.orchestrationCaller)?.sessionId !== sessionId) {
+        return { place: null }
+      }
+      const target = runtime.getExternalConversationSeam()?.replyTarget(chatPaneKey(sessionId))
+      const placed = await wakeReplyPlace(bot.id, target ?? null, () =>
+        readBotTurnOrigin(runtime, runtime.getOrchestrationDb(), sessionId).catch(() => null)
+      )
+      return placed ?? { place: null }
     }
   }),
   CONNECTOR_ACT_METHOD,

@@ -46,7 +46,9 @@ const REPLY_REFUSALS: Readonly<Record<string, string>> = {
   not_a_cloud_conversation:
     "Nothing was posted: this chat isn't attached to a Slack, GitHub, Linear or Discord thread on this host. A reply works only in a conversation someone started by messaging the bot there, or an event's run that answers in its thread. Your Home chat has none, and an automation run has one only when its results go to the event's thread (--results-to thread); put it in your final message, which goes wherever this chat's results go.",
   bot_chat_reply:
-    'Nothing was posted: this is your Chat, which has no one conversation to post into. Your final message is posted when you finish.',
+    "Nothing was posted: this is your Chat, which answers whichever direct message wrote last. A turn a direct message started posts your final message there when you finish. A turn that started on its own stays in Orca: to answer the direct message a worker start came from, pass the --to that Orca's note on that start named.",
+  not_a_saved_dm:
+    "Nothing was posted: --to works only in your Chat, for a direct message Orca's note on a worker start named there (one saved before Orca restarted is gone). Your final message stays in Orca.",
   not_this_bots_conversation:
     "Nothing was posted: this chat's conversation doesn't belong to this bot."
 }
@@ -216,6 +218,10 @@ export const BOT_REPLY_HANDLERS: Record<string, CommandHandler> = {
       )
     }
     const notes = readReplyNotes(flags)
+    const to = getOptionalStringFlag(flags, 'to')
+    if (to && (emoji || paths.length > 0 || choices || notes)) {
+      throw new RuntimeClientError('invalid_argument', '--to takes --text only.')
+    }
     const sessionId = readInjectedAgentSessionId()
     if ((emoji || paths.length > 0 || choices) && !sessionId) {
       throw new RuntimeClientError(
@@ -254,14 +260,15 @@ export const BOT_REPLY_HANDLERS: Record<string, CommandHandler> = {
           replyId: randomUUID(),
           text,
           ...(notes ? { review: notes } : {}),
-          ...(pagesAsFiles ? { pagesAsFiles: true } : {})
+          ...(pagesAsFiles ? { pagesAsFiles: true } : {}),
+          ...(to ? { to } : {})
         },
         { timeoutMs: REPLY_TIMEOUT_MS }
       )
     let pages: { files: number; sent: Awaited<ReturnType<typeof replyWithFiles>> } | undefined
     const replied =
       text && files.length === 0 && !offered
-        ? await reply(sessionId !== undefined).catch(async (error: unknown) => {
+        ? await reply(sessionId !== undefined && !to).catch(async (error: unknown) => {
             if (
               !(
                 error instanceof RuntimeClientError &&
